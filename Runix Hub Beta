@@ -1,426 +1,646 @@
--- 1. Biblioteca MaterialLua com tratamento de erro
-local Material, materialLoaded = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/MaterialLua/master/Module.lua"))()
+-- Script PvP Runix Hub - Versão Corrigida
+-- Por favor, execute no executor apropriado (Synapse, KRNL, Fluxus, etc.)
+
+-- Verificar se estamos no Roblox
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- 1. Biblioteca MaterialLua (requer executor com permissão de HTTP)
+local Material
+local success, errorMsg = pcall(function()
+    Material = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/MaterialLua/master/Module.lua"))()
 end)
 
-if not materialLoaded then
-    warn("Falha ao carregar MaterialLua")
+if not success then
+    warn("⚠️ Falha ao carregar MaterialLua: " .. tostring(errorMsg))
+    warn("📁 Tentando carregar interface básica...")
+    
+    -- Interface básica alternativa
+    local ScreenGui = Instance.new("ScreenGui")
+    local TextLabel = Instance.new("TextLabel")
+    ScreenGui.Parent = game.CoreGui
+    TextLabel.Parent = ScreenGui
+    TextLabel.Size = UDim2.new(0, 300, 0, 50)
+    TextLabel.Position = UDim2.new(0.5, -150, 0.5, -25)
+    TextLabel.Text = "MaterialLua não carregou\nUse um executor compatível"
+    TextLabel.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    TextLabel.TextColor3 = Color3.new(1, 1, 1)
+    
+    -- Se MaterialLua não carregar, pare aqui
     return
 end
 
--- 2. Serviços e variáveis
+-- 2. Serviços essenciais
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
-local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
-local camera = workspace.CurrentCamera
+local TweenService = game:GetService("TweenService")
+
+-- Referências importantes
+local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
+local Camera = Workspace.CurrentCamera
 
--- Cache de instâncias para melhor performance
-local cachedHighlights = {}
-local cachedCharacters = {}
+-- Aguardar LocalPlayer carregar completamente
+repeat task.wait() until LocalPlayer.Character ~= nil
 
--- Configurações com valores padrão
-local config = {
-    espEnabled = true,
-    enemyColor = Color3.fromRGB(255, 50, 50),
-    teamColor = Color3.fromRGB(50, 255, 50),
-    espTransparency = 0.5,
-    teamCheck = true
+-- 3. Configurações
+local Config = {
+    -- ESP
+    ESP = {
+        Enabled = true,
+        TeamCheck = true,
+        EnemyColor = Color3.fromRGB(255, 50, 50),
+        TeamColor = Color3.fromRGB(50, 255, 50),
+        FillTransparency = 0.5,
+        OutlineTransparency = 0,
+        Thickness = 1
+    },
+    
+    -- Aimbot
+    Aimbot = {
+        Enabled = false,
+        AimKey = Enum.UserInputType.MouseButton2, -- Botão direito
+        Smoothness = 0.15,
+        FOV = 100,
+        VisibleCheck = true,
+        TeamCheck = true
+    },
+    
+    -- Hitbox
+    Hitbox = {
+        Enabled = false,
+        Size = Vector3.new(7, 7, 7),
+        NormalSize = Vector3.new(2, 2, 1),
+        Transparency = 0.6,
+        Material = Enum.Material.ForceField
+    }
 }
 
-local hitboxConfig = {
-    enabled = false,
-    size = Vector3.new(7, 7, 7),
-    normalSize = Vector3.new(2, 2, 1),
-    transparency = 0.6
-}
+-- 4. Variáveis globais
+local ESPCache = {} -- { [Player] = {Highlight = obj, Box = obj} }
+local Aiming = false
+local FOVCircle
 
--- 3. Funções ESP / Hitbox otimizadas
-local function isEnemy(player)
-    if not config.teamCheck then return true end
-    if not LocalPlayer.Team or not player.Team then return true end
-    return player.Team ~= LocalPlayer.Team
+-- 5. Funções de utilitário
+local function IsEnemy(Player)
+    if not Config.ESP.TeamCheck then 
+        return true 
+    end
+    if not LocalPlayer.Team or not Player.Team then 
+        return true 
+    end
+    return Player.Team ~= LocalPlayer.Team
 end
 
-local function updatePlayerESP(player, character)
-    if not character or not character.Parent then return end
+local function IsAlive(Character)
+    if not Character then return false end
+    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+    return Humanoid and Humanoid.Health > 0
+end
+
+local function IsVisible(Part)
+    if not Config.Aimbot.VisibleCheck then return true end
     
-    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return end
+    local Character = LocalPlayer.Character
+    if not Character then return false end
     
-    -- Atualizar Highlight
-    local highlight = cachedHighlights[player]
-    if highlight then
-        highlight.Enabled = config.espEnabled and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0
-        
-        if highlight.Enabled then
-            local isEnemyPlayer = isEnemy(player)
-            highlight.FillColor = isEnemyPlayer and config.enemyColor or config.teamColor
-            highlight.OutlineColor = highlight.FillColor
+    local Head = Character:FindFirstChild("Head")
+    if not Head then return false end
+    
+    local Origin = Head.Position
+    local Target = Part.Position
+    local Direction = (Target - Origin).Unit * (Origin - Target).Magnitude
+    
+    local RaycastParams = RaycastParams.new()
+    RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    RaycastParams.FilterDescendantsInstances = {Character, Camera}
+    RaycastParams.IgnoreWater = true
+    
+    local Result = Workspace:Raycast(Origin, Direction, RaycastParams)
+    
+    if Result then
+        local HitParent = Result.Instance:FindFirstAncestorOfClass("Model")
+        if HitParent and Players:GetPlayerFromCharacter(HitParent) then
+            return true
         end
+        return false
     end
     
-    -- Atualizar Hitbox
-    if hitboxConfig.enabled and isEnemy(player) then
-        humanoidRootPart.Size = hitboxConfig.size
-        humanoidRootPart.Transparency = hitboxConfig.transparency
-        humanoidRootPart.Material = Enum.Material.ForceField
-        humanoidRootPart.CanCollide = false
-    else
-        humanoidRootPart.Size = hitboxConfig.normalSize
-        humanoidRootPart.Transparency = 1
-        humanoidRootPart.Material = Enum.Material.Plastic
-    end
+    return true
 end
 
-local function createESP(player)
-    if player == LocalPlayer then return end
+-- 6. Sistema ESP
+local function CreateESP(Player)
+    if Player == LocalPlayer then return end
     
-    local function setupCharacter(character)
-        if not character then return end
-        repeat task.wait() until character:FindFirstChild("HumanoidRootPart")
+    local ESPData = {
+        Highlight = nil,
+        Box = nil,
+        Tracer = nil,
+        Character = nil
+    }
+    
+    ESPCache[Player] = ESPData
+    
+    local function SetupCharacter(Character)
+        if not Character then return end
         
-        -- Criar Highlight se não existir
-        if not cachedHighlights[player] then
-            local highlight = Instance.new("Highlight")
-            highlight.Name = "ESP_Highlight"
-            highlight.FillTransparency = config.espTransparency
-            highlight.OutlineTransparency = 0
-            highlight.Adornee = character
-            highlight.Parent = character
-            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        -- Aguardar partes essenciais
+        repeat task.wait() until Character:FindFirstChild("HumanoidRootPart")
+        
+        -- Criar Highlight
+        if not ESPData.Highlight then
+            ESPData.Highlight = Instance.new("Highlight")
+            ESPData.Highlight.Name = "ESP_Highlight_" .. Player.Name
+            ESPData.Highlight.FillTransparency = Config.ESP.FillTransparency
+            ESPData.Highlight.OutlineTransparency = Config.ESP.OutlineTransparency
+            ESPData.Highlight.OutlineThickness = Config.ESP.Thickness
+            ESPData.Highlight.Adornee = Character
+            ESPData.Highlight.Parent = Character
+        end
+        
+        -- Criar Box Outline
+        if not ESPData.Box then
+            ESPData.Box = Instance.new("BoxHandleAdornment")
+            ESPData.Box.Name = "ESP_Box_" .. Player.Name
+            ESPData.Box.Adornee = Character:WaitForChild("HumanoidRootPart")
+            ESPData.Box.AlwaysOnTop = true
+            ESPData.Box.ZIndex = 5
+            ESPData.Box.Size = Character.HumanoidRootPart.Size * 1.2
+            ESPData.Box.Transparency = 0.7
+            ESPData.Box.Parent = Character.HumanoidRootPart
+        end
+        
+        ESPData.Character = Character
+        
+        -- Atualizar cores
+        if ESPData.Highlight and ESPData.Box then
+            local IsEnemyPlayer = IsEnemy(Player)
+            local Color = IsEnemyPlayer and Config.ESP.EnemyColor or Config.ESP.TeamColor
             
-            cachedHighlights[player] = highlight
+            ESPData.Highlight.FillColor = Color
+            ESPData.Highlight.OutlineColor = Color
+            ESPData.Highlight.Enabled = Config.ESP.Enabled and IsAlive(Character)
+            
+            ESPData.Box.Color3 = Color
+            ESPData.Box.Visible = Config.ESP.Enabled and IsAlive(Character)
         end
-        
-        cachedCharacters[player] = character
-        updatePlayerESP(player, character)
     end
     
     -- Conectar eventos
-    if player.Character then
-        setupCharacter(player.Character)
+    if Player.Character then
+        SetupCharacter(Player.Character)
     end
     
-    player.CharacterAdded:Connect(function(character)
-        setupCharacter(character)
+    Player.CharacterAdded:Connect(function(Character)
+        SetupCharacter(Character)
     end)
     
-    player.CharacterRemoving:Connect(function()
-        cachedCharacters[player] = nil
-    end)
-end
-
--- Inicializar ESP para jogadores existentes
-for _, player in pairs(Players:GetPlayers()) do
-    createESP(player)
-end
-
-Players.PlayerAdded:Connect(createESP)
-Players.PlayerRemoving:Connect(function(player)
-    cachedHighlights[player] = nil
-    cachedCharacters[player] = nil
-end)
-
--- Loop de atualização otimizado
-local heartbeat = RunService.Heartbeat
-spawn(function()
-    while true do
-        if hitboxConfig.enabled or config.espEnabled then
-            for player, character in pairs(cachedCharacters) do
-                updatePlayerESP(player, character)
-            end
+    Player.CharacterRemoving:Connect(function()
+        if ESPData.Highlight then
+            ESPData.Highlight:Destroy()
+            ESPData.Highlight = nil
         end
-        heartbeat:Wait()
-    end
-end)
-
--- 4. Aimbot melhorado com suavização e validações
-local aiming = false
-local aimbotFOV = 100
-local aimSmoothness = 0.15
-local aimKey = Enum.UserInputType.MouseButton2 -- Botão direito do mouse
-local aimEnabled = true
-
--- Configurar FOV Circle
-local Drawing = Drawing
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Radius = aimbotFOV
-fovCircle.Thickness = 1
-fovCircle.Transparency = 0.7
-fovCircle.Color = Color3.fromRGB(255, 255, 100)
-fovCircle.Filled = false
-fovCircle.ZIndex = 10
-
-local function isValidTarget(player)
-    if player == LocalPlayer then return false end
-    if not player.Character then return false end
-    
-    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return false end
-    
-    return isEnemy(player)
+        if ESPData.Box then
+            ESPData.Box:Destroy()
+            ESPData.Box = nil
+        end
+        ESPData.Character = nil
+    end)
 end
 
-local function getClosestTarget()
-    local closest, shortestDist = nil, aimbotFOV
-    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-    
-    for _, player in pairs(Players:GetPlayers()) do
-        if isValidTarget(player) then
-            local character = player.Character
-            local head = character and character:FindFirstChild("Head")
+local function UpdateAllESP()
+    for Player, ESPData in pairs(ESPCache) do
+        if ESPData.Character and ESPData.Highlight and ESPData.Box then
+            local IsEnemyPlayer = IsEnemy(Player)
+            local Color = IsEnemyPlayer and Config.ESP.EnemyColor or Config.ESP.TeamColor
+            local IsAliveChar = IsAlive(ESPData.Character)
             
-            if head then
-                local screenPoint, onScreen = camera:WorldToViewportPoint(head.Position)
-                if onScreen then
-                    local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
-                    local distance = (mousePos - screenPos).Magnitude
-                    
-                    if distance < shortestDist then
-                        shortestDist = distance
-                        closest = player
-                    end
-                end
+            ESPData.Highlight.FillColor = Color
+            ESPData.Highlight.OutlineColor = Color
+            ESPData.Highlight.Enabled = Config.ESP.Enabled and IsAliveChar
+            
+            ESPData.Box.Color3 = Color
+            ESPData.Box.Visible = Config.ESP.Enabled and IsAliveChar
+            
+            -- Atualizar tamanho do box
+            if ESPData.Character:FindFirstChild("HumanoidRootPart") then
+                ESPData.Box.Size = ESPData.Character.HumanoidRootPart.Size * 1.2
+                ESPData.Box.Adornee = ESPData.Character.HumanoidRootPart
             end
         end
     end
-    
-    return closest
 end
 
--- Controle por tecla
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
+-- 7. Sistema Hitbox
+local function UpdateHitboxes()
+    for Player, ESPData in pairs(ESPCache) do
+        if ESPData.Character and ESPData.Character:FindFirstChild("HumanoidRootPart") then
+            local HRP = ESPData.Character.HumanoidRootPart
+            
+            if Config.Hitbox.Enabled and IsEnemy(Player) then
+                HRP.Size = Config.Hitbox.Size
+                HRP.Transparency = Config.Hitbox.Transparency
+                HRP.Material = Config.Hitbox.Material
+                HRP.CanCollide = false
+            else
+                HRP.Size = Config.Hitbox.NormalSize
+                HRP.Transparency = 1
+                HRP.Material = Enum.Material.Plastic
+            end
+        end
+    end
+end
+
+-- 8. Sistema Aimbot
+local function GetClosestTarget()
+    local ClosestPlayer = nil
+    local ShortestDistance = Config.Aimbot.FOV
+    local MousePosition = Vector2.new(Mouse.X, Mouse.Y)
     
-    if input.UserInputType == aimKey then
-        aiming = aimEnabled
+    for _, Player in pairs(Players:GetPlayers()) do
+        if Player == LocalPlayer then continue end
+        if not Player.Character then continue end
+        
+        local Character = Player.Character
+        local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+        if not Humanoid or Humanoid.Health <= 0 then continue end
+        
+        if Config.Aimbot.TeamCheck and not IsEnemy(Player) then continue end
+        
+        local Head = Character:FindFirstChild("Head")
+        if not Head then continue end
+        
+        local ScreenPosition, OnScreen = Camera:WorldToViewportPoint(Head.Position)
+        if not OnScreen then continue end
+        
+        if Config.Aimbot.VisibleCheck and not IsVisible(Head) then continue end
+        
+        local ScreenPoint = Vector2.new(ScreenPosition.X, ScreenPosition.Y)
+        local Distance = (MousePosition - ScreenPoint).Magnitude
+        
+        if Distance < ShortestDistance then
+            ShortestDistance = Distance
+            ClosestPlayer = Player
+        end
+    end
+    
+    return ClosestPlayer
+end
+
+-- 9. FOV Circle Drawing
+if Drawing then
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Visible = false
+    FOVCircle.Radius = Config.Aimbot.FOV
+    FOVCircle.Thickness = 1
+    FOVCircle.Color = Color3.fromRGB(255, 255, 100)
+    FOVCircle.Filled = false
+    FOVCircle.Transparency = 0.7
+else
+    warn("⚠️ Drawing não está disponível, FOV Circle desativado")
+end
+
+-- 10. Loop principal
+spawn(function()
+    -- Inicializar ESP para jogadores existentes
+    for _, Player in pairs(Players:GetPlayers()) do
+        CreateESP(Player)
+    end
+    
+    -- Conectar eventos
+    Players.PlayerAdded:Connect(function(Player)
+        CreateESP(Player)
+    end)
+    
+    Players.PlayerRemoving:Connect(function(Player)
+        if ESPCache[Player] then
+            if ESPCache[Player].Highlight then
+                ESPCache[Player].Highlight:Destroy()
+            end
+            if ESPCache[Player].Box then
+                ESPCache[Player].Box:Destroy()
+            end
+            ESPCache[Player] = nil
+        end
+    end)
+    
+    -- Loop de atualização
+    while task.wait(0.1) do
+        if Config.ESP.Enabled then
+            UpdateAllESP()
+        end
+        
+        if Config.Hitbox.Enabled then
+            UpdateHitboxes()
+        end
+        
+        -- Atualizar FOV Circle
+        if FOVCircle then
+            FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+            FOVCircle.Radius = Config.Aimbot.FOV
+            FOVCircle.Visible = Config.Aimbot.Enabled and Aiming
+        end
     end
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == aimKey then
-        aiming = false
+-- 11. Input para Aimbot
+UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+    if GameProcessed then return end
+    
+    if Input.UserInputType == Config.Aimbot.AimKey and Config.Aimbot.Enabled then
+        Aiming = true
     end
 end)
 
--- Atualização do FOV Circle
-RunService.RenderStepped:Connect(function()
-    fovCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
-    fovCircle.Radius = aimbotFOV
-    fovCircle.Visible = aiming and aimEnabled
+UserInputService.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Config.Aimbot.AimKey then
+        Aiming = false
+    end
 end)
 
--- Aimbot principal
+-- 12. Loop do Aimbot
 RunService.RenderStepped:Connect(function()
-    if not aiming or not aimEnabled then return end
+    if not Config.Aimbot.Enabled or not Aiming then return end
     
-    local target = getClosestTarget()
-    if not target or not target.Character then return end
+    local Target = GetClosestTarget()
+    if not Target or not Target.Character then return end
     
-    local head = target.Character:FindFirstChild("Head")
-    if not head then return end
+    local Head = Target.Character:FindFirstChild("Head")
+    if not Head then return end
     
-    local cam = workspace.CurrentCamera
-    local currentCFrame = cam.CFrame
+    local CurrentCFrame = Camera.CFrame
+    local TargetPosition = Head.Position + Vector3.new(0, 1.5, 0) -- Mira um pouco acima da cabeça
     
-    -- Calcular direção suavizada
-    local targetPosition = head.Position
-    local currentPosition = currentCFrame.Position
-    local direction = (targetPosition - currentPosition).Unit
+    local SmoothedCFrame = CurrentCFrame:Lerp(
+        CFrame.new(CurrentCFrame.Position, TargetPosition),
+        Config.Aimbot.Smoothness
+    )
     
-    -- Criar novo CFrame com suavização
-    local newCFrame = CFrame.new(currentPosition, currentPosition + direction)
-    cam.CFrame = currentCFrame:Lerp(newCFrame, aimSmoothness)
+    Camera.CFrame = SmoothedCFrame
 end)
 
--- 5. GUI com MaterialLua - Versão melhorada
-local themes = { "Dark", "Light", "Aqua", "Jester" }
-local UI, PlayerTab, VisualTab, SettingsTab
+-- 13. Interface com MaterialLua
+local Themes = {"Dark", "Light", "Aqua", "Jester"}
+local UI
 
-local function buildUI(theme)
-    if UI then 
-        UI:Destroy() 
-        task.wait(0.1) -- Pequeno delay para evitar conflitos
+local function CreateUI(Theme)
+    if UI then
+        UI:Destroy()
+        task.wait(0.1)
     end
     
     UI = Material.Load({
         Title = "Runix Hub - PvP",
-        Style = 2, -- Estilo mais moderno
+        Style = 3,
         SizeX = 450,
         SizeY = 500,
-        Theme = theme or "Dark"
+        Theme = Theme or "Dark"
     })
     
-    -- Aba Player
-    PlayerTab = UI.New({ Title = "Combat" })
+    -- Aba Principal
+    local MainTab = UI.New({Title = "Main"})
     
-    PlayerTab.Toggle({
-        Text = "Ativar Aimbot",
-        Callback = function(state)
-            aimEnabled = state
-            if not state then aiming = false end
+    MainTab.Toggle({
+        Text = "Enable ESP",
+        Callback = function(State)
+            Config.ESP.Enabled = State
+            UpdateAllESP()
         end,
-        Enabled = aimEnabled
+        Enabled = Config.ESP.Enabled
     })
     
-    PlayerTab.Slider({
-        Text = "Suavidade Aimbot",
+    MainTab.Toggle({
+        Text = "Enable Aimbot",
+        Callback = function(State)
+            Config.Aimbot.Enabled = State
+            if not State then
+                Aiming = false
+            end
+        end,
+        Enabled = Config.Aimbot.Enabled
+    })
+    
+    MainTab.Toggle({
+        Text = "Enable Hitbox",
+        Callback = function(State)
+            Config.Hitbox.Enabled = State
+            UpdateHitboxes()
+        end,
+        Enabled = Config.Hitbox.Enabled
+    })
+    
+    MainTab.Button({
+        Text = "Update All Players",
+        Callback = function()
+            UpdateAllESP()
+            UpdateHitboxes()
+            Material.Snackbar("All players updated!")
+        end
+    })
+    
+    -- Aba ESP
+    local ESPTab = UI.New({Title = "ESP Settings"})
+    
+    ESPTab.ColorPicker({
+        Text = "Enemy Color",
+        Default = Config.ESP.EnemyColor,
+        Callback = function(Color)
+            Config.ESP.EnemyColor = Color
+            UpdateAllESP()
+        end
+    })
+    
+    ESPTab.ColorPicker({
+        Text = "Team Color",
+        Default = Config.ESP.TeamColor,
+        Callback = function(Color)
+            Config.ESP.TeamColor = Color
+            UpdateAllESP()
+        end
+    })
+    
+    ESPTab.Toggle({
+        Text = "Team Check",
+        Callback = function(State)
+            Config.ESP.TeamCheck = State
+            UpdateAllESP()
+        end,
+        Enabled = Config.ESP.TeamCheck
+    })
+    
+    ESPTab.Slider({
+        Text = "ESP Transparency",
+        Min = 0,
+        Max = 1,
+        Def = Config.ESP.FillTransparency,
+        Callback = function(Value)
+            Config.ESP.FillTransparency = Value
+            for _, ESPData in pairs(ESPCache) do
+                if ESPData.Highlight then
+                    ESPData.Highlight.FillTransparency = Value
+                end
+            end
+        end,
+        Decimals = 1
+    })
+    
+    -- Aba Aimbot
+    local AimbotTab = UI.New({Title = "Aimbot Settings"})
+    
+    AimbotTab.Slider({
+        Text = "Aimbot FOV",
+        Min = 20,
+        Max = 500,
+        Def = Config.Aimbot.FOV,
+        Callback = function(Value)
+            Config.Aimbot.FOV = Value
+            if FOVCircle then
+                FOVCircle.Radius = Value
+            end
+        end
+    })
+    
+    AimbotTab.Slider({
+        Text = "Smoothness",
         Min = 0.05,
-        Max = 0.5,
-        Def = aimSmoothness,
-        Callback = function(value)
-            aimSmoothness = value
+        Max = 1,
+        Def = Config.Aimbot.Smoothness,
+        Callback = function(Value)
+            Config.Aimbot.Smoothness = Value
         end,
         Decimals = 2
     })
     
-    PlayerTab.Slider({
-        Text = "Campo de Visão",
-        Min = 20,
-        Max = 300,
-        Def = aimbotFOV,
-        Callback = function(value)
-            aimbotFOV = value
-        end
-    })
-    
-    PlayerTab.Button({
-        Text = "Tecla Aimbot: Botão Direito",
-        Callback = function()
-            -- Futura implementação para mudar tecla
-            Material.Snackbar("Use o botão direito do mouse")
-        end
-    })
-    
-    -- Aba Visual
-    VisualTab = UI.New({ Title = "Visual" })
-    
-    VisualTab.Toggle({
-        Text = "Ativar ESP",
-        Callback = function(state)
-            config.espEnabled = state
+    AimbotTab.Toggle({
+        Text = "Visible Check",
+        Callback = function(State)
+            Config.Aimbot.VisibleCheck = State
         end,
-        Enabled = config.espEnabled
+        Enabled = Config.Aimbot.VisibleCheck
     })
     
-    VisualTab.Toggle({
-        Text = "Verificar Time",
-        Callback = function(state)
-            config.teamCheck = state
+    AimbotTab.Toggle({
+        Text = "Team Check",
+        Callback = function(State)
+            Config.Aimbot.TeamCheck = State
         end,
-        Enabled = config.teamCheck
+        Enabled = Config.Aimbot.TeamCheck
     })
     
-    VisualTab.ColorPicker({
-        Text = "Cor Inimigos",
-        Default = config.enemyColor,
-        Callback = function(color)
-            config.enemyColor = color
-        end
-    })
+    -- Aba Hitbox
+    local HitboxTab = UI.New({Title = "Hitbox Settings"})
     
-    VisualTab.ColorPicker({
-        Text = "Cor Aliados",
-        Default = config.teamColor,
-        Callback = function(color)
-            config.teamColor = color
-        end
-    })
-    
-    VisualTab.Toggle({
-        Text = "Hitbox Expandida",
-        Callback = function(state)
-            hitboxConfig.enabled = state
-        end,
-        Enabled = hitboxConfig.enabled
-    })
-    
-    VisualTab.Slider({
-        Text = "Tamanho Hitbox",
+    HitboxTab.Slider({
+        Text = "Hitbox Size",
         Min = 2,
-        Max = 15,
-        Def = hitboxConfig.size.X,
-        Callback = function(value)
-            hitboxConfig.size = Vector3.new(value, value, value)
+        Max = 20,
+        Def = Config.Hitbox.Size.X,
+        Callback = function(Value)
+            Config.Hitbox.Size = Vector3.new(Value, Value, Value)
+            UpdateHitboxes()
         end
+    })
+    
+    HitboxTab.Slider({
+        Text = "Hitbox Transparency",
+        Min = 0,
+        Max = 1,
+        Def = Config.Hitbox.Transparency,
+        Callback = function(Value)
+            Config.Hitbox.Transparency = Value
+            UpdateHitboxes()
+        end,
+        Decimals = 1
     })
     
     -- Aba Configurações
-    SettingsTab = UI.New({ Title = "Configurações" })
+    local SettingsTab = UI.New({Title = "Settings"})
     
     SettingsTab.Dropdown({
-        Text = "Tema da Interface",
-        Options = themes,
-        Callback = function(selection)
-            buildUI(selection)
-            Material.Snackbar("Tema alterado para: " .. selection)
+        Text = "UI Theme",
+        Options = Themes,
+        Callback = function(Selected)
+            CreateUI(Selected)
+            Material.Snackbar("Theme changed to: " .. Selected)
         end
     })
     
     SettingsTab.Button({
-        Text = "Salvar Configurações",
+        Text = "Destroy GUI",
         Callback = function()
-            Material.Snackbar("Configurações salvas! (Implementar save system)")
+            if UI then
+                UI:Destroy()
+                UI = nil
+                Material.Snackbar("GUI destroyed! Reload script to show again.")
+            end
         end
     })
     
     SettingsTab.Button({
-        Text = "Recarregar Script",
+        Text = "Reload Script",
         Callback = function()
-            Material.Snackbar("Recarregando...")
-            task.wait(1)
-            -- Implementar reload system
+            Material.Snackbar("Please re-execute the script manually.")
         end
     })
     
-    SettingsTab.Toggle({
-        Text = "Mostrar FPS",
-        Callback = function(state)
-            -- Futura implementação de FPS counter
-        end,
-        Enabled = false
+    SettingsTab.Label({
+        Text = "Runix Hub v1.0",
+        Center = true
     })
     
+    -- Inicializar UI
     UI.Init()
 end
 
--- Inicializar UI
-local success, err = pcall(function()
-    buildUI("Dark")
+-- 14. Inicialização
+spawn(function()
+    task.wait(1) -- Esperar um pouco antes de criar a UI
+    local Success, Err = pcall(function()
+        CreateUI("Dark")
+    end)
+    
+    if not Success then
+        warn("⚠️ Erro ao criar interface: " .. tostring(Err))
+        
+        -- Criar interface básica alternativa
+        local BasicGUI = Instance.new("ScreenGui")
+        local Frame = Instance.new("Frame")
+        local TextLabel = Instance.new("TextLabel")
+        
+        BasicGUI.Name = "RunixHubGUI"
+        BasicGUI.Parent = game.CoreGui
+        
+        Frame.Size = UDim2.new(0, 200, 0, 60)
+        Frame.Position = UDim2.new(0.5, -100, 0, 10)
+        Frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        Frame.BorderSizePixel = 0
+        Frame.Parent = BasicGUI
+        
+        TextLabel.Size = UDim2.new(1, 0, 1, 0)
+        TextLabel.BackgroundTransparency = 1
+        TextLabel.Text = "Runix Hub PvP\nLoaded Successfully"
+        TextLabel.TextColor3 = Color3.new(1, 1, 1)
+        TextLabel.TextScaled = true
+        TextLabel.Parent = Frame
+    else
+        print("✅ Runix Hub PvP carregado com sucesso!")
+        print("📁 ESP: " .. tostring(Config.ESP.Enabled))
+        print("🎯 Aimbot: " .. tostring(Config.Aimbot.Enabled))
+        print("🔲 Hitbox: " .. tostring(Config.Hitbox.Enabled))
+    end
 end)
 
-if not success then
-    warn("Erro ao criar interface:", err)
-end
-
--- Função de limpeza
-local function cleanup()
-    for _, highlight in pairs(cachedHighlights) do
-        if highlight then
-            highlight:Destroy()
-        end
-    end
-    
-    if fovCircle then
-        fovCircle:Remove()
-    end
-    
-    if UI then
-        UI:Destroy()
-    end
-    
-    cachedHighlights = {}
-    cachedCharacters = {}
-end
-
--- Conectar evento de saída do jogo
-game:BindToClose(function()
-    cleanup()
+-- 15. Limpeza automática
+game:GetService("UserInputService").WindowFocusReleased:Connect(function()
+    -- Resetar estado quando perder foco
+    Aiming = false
 end)
 
 -- Notificação de inicialização
-warn("[Runix Hub] Script PvP carregado com sucesso!")
+warn("[Runix Hub] Script PvP carregado!")
+warn("[Controls] Right Mouse Button: Aimbot")
+warn("[Status] ESP: ON | Aimbot: READY | Hitbox: CONFIGURABLE")
