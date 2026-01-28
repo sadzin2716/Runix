@@ -124,7 +124,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- 5. SISTEMA DE AUTO FARM COM COORDENADAS PRÉ-DEFINIDAS
+-- 5. SISTEMA DE AUTO FARM CORRIGIDO
 
 local function saveCurrentPosition()
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
@@ -162,65 +162,131 @@ local function getEnemyPlayer()
     return nil
 end
 
+-- Sistema de Wallbang CORRIGIDO - só afeta partes específicas
+local wallsDisabled = {}
+local function enableWallbang(target)
+    if not autoFarmConfig.wallbang or not target or not target.Character then return end
+    
+    local myPos = LocalPlayer.Character.HumanoidRootPart.Position
+    local targetPos = target.Character.HumanoidRootPart.Position
+    
+    -- Só desabilita partes entre você e o alvo
+    local ray = Ray.new(myPos, (targetPos - myPos).Unit * (targetPos - myPos).Magnitude)
+    local hits = workspace:GetPartsInRegion3(Region3.new(myPos, targetPos):ExpandToGrid(4))
+    
+    for _, part in pairs(hits) do
+        if part:IsA("BasePart") and 
+           not part:IsDescendantOf(LocalPlayer.Character) and 
+           not part:IsDescendantOf(target.Character) and
+           part.CanCollide then
+            
+            wallsDisabled[part] = true
+            part.CanCollide = false
+        end
+    end
+end
+
+local function restoreWalls()
+    for part, _ in pairs(wallsDisabled) do
+        if part and part.Parent then
+            part.CanCollide = true
+        end
+    end
+    wallsDisabled = {}
+end
+
+-- Função de atirar CORRIGIDA - tiro contínuo
+local shooting = false
 local function shootAtTarget(target)
-    if not target or not target.Character then return end
+    if not target or not target.Character or shooting then return end
     
     local head = target.Character:FindFirstChild("Head")
     if not head then return end
     
-    -- Desabilita colisão para wallbang
+    shooting = true
+    
+    -- Ativa wallbang se necessário
     if autoFarmConfig.wallbang then
-        for _, part in pairs(workspace:GetDescendants()) do
-            if part:IsA("BasePart") and not part:IsDescendantOf(LocalPlayer.Character) and not part:IsDescendantOf(target.Character) then
-                part.CanCollide = false
-            end
-        end
+        enableWallbang(target)
     end
     
     -- Mira na cabeça do inimigo
     local cam = workspace.CurrentCamera
     cam.CFrame = CFrame.new(cam.CFrame.Position, head.Position)
     
-    -- Simula o clique do mouse para atirar
+    -- Simula segurar o botão do mouse (tiro contínuo)
     mouse1press()
-    wait(autoFarmConfig.shootDelay)
-    mouse1release()
+    
+    shooting = false
 end
 
--- Loop principal do Auto Farm
+local function stopShooting()
+    mouse1release()
+    if autoFarmConfig.wallbang then
+        restoreWalls()
+    end
+end
+
+-- Loop principal do Auto Farm CORRIGIDO
 local farmRunning = false
+local currentTarget = nil
+
 task.spawn(function()
     while true do
-        wait(0.1)
+        wait(0.05)
         
         if autoFarmConfig.enabled and not farmRunning then
             farmRunning = true
             
             task.spawn(function()
                 while autoFarmConfig.enabled do
-                    -- Verifica se está no lobby e teleporta para o pad
+                    -- Teleporta para o pad
                     if autoFarmConfig.teleportToPad and autoFarmConfig.padPosition then
-                        local success = teleportToPad()
-                        if success then
-                            wait(1.5) -- Espera após teleportar
+                        local myChar = LocalPlayer.Character
+                        if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+                            local myPos = myChar.HumanoidRootPart.Position
+                            local padPos = autoFarmConfig.padPosition.Position
+                            local distance = (myPos - padPos).Magnitude
+                            
+                            -- Só teleporta se estiver longe do pad
+                            if distance > 10 then
+                                teleportToPad()
+                                wait(1)
+                            end
                         end
                     end
                     
-                    -- Auto Shoot - loop contínuo de tiro
+                    -- Sistema de Auto Shoot CONTÍNUO
                     if autoFarmConfig.autoShoot then
                         local enemy = getEnemyPlayer()
+                        
                         if enemy and isAlive(enemy) then
+                            currentTarget = enemy
                             shootAtTarget(enemy)
+                        else
+                            -- Solta o gatilho se não há inimigo
+                            if currentTarget then
+                                stopShooting()
+                                currentTarget = nil
+                            end
                         end
+                    else
+                        stopShooting()
+                        currentTarget = nil
                     end
                     
-                    wait(autoFarmConfig.shootDelay)
+                    wait(0.01) -- Loop bem rápido para tiro contínuo
                 end
+                
+                -- Limpa tudo ao desativar
+                stopShooting()
+                currentTarget = nil
                 farmRunning = false
             end)
         end
         
         if not autoFarmConfig.enabled then
+            stopShooting()
             farmRunning = false
         end
     end
@@ -292,6 +358,7 @@ local function buildUI(theme)
                 print("═══════════════════════════════════════")
             else
                 print("[Auto Farm] ❌ Auto Farm DESATIVADO!")
+                stopShooting()
             end
         end, 
         Enabled=autoFarmConfig.enabled 
@@ -313,7 +380,9 @@ local function buildUI(theme)
         Callback=function(s) 
             autoFarmConfig.autoShoot = s 
             if s then
-                print("[Auto Farm] ✅ Auto Shoot ATIVADO!")
+                print("[Auto Farm] ✅ Auto Shoot ATIVADO - Tiro contínuo!")
+            else
+                stopShooting()
             end
         end, 
         Enabled=autoFarmConfig.autoShoot 
@@ -324,21 +393,12 @@ local function buildUI(theme)
         Callback=function(s) 
             autoFarmConfig.wallbang = s 
             if s then
-                print("[Auto Farm] ✅ Wallbang ATIVADO!")
+                print("[Auto Farm] ✅ Wallbang ATIVADO - Só afeta obstáculos!")
+            else
+                restoreWalls()
             end
         end, 
         Enabled=autoFarmConfig.wallbang 
-    })
-    
-    FarmTab.Slider({ 
-        Text="⏱️ Delay entre Tiros (ms)", 
-        Min=10, 
-        Max=500, 
-        Def=autoFarmConfig.shootDelay * 1000,
-        Callback=function(v) 
-            autoFarmConfig.shootDelay = v / 1000 
-            print(string.format("[Auto Farm] Delay ajustado: %dms", v))
-        end 
     })
 
     UI.Init()
@@ -347,11 +407,15 @@ end
 buildUI("Dark")
 
 print("═══════════════════════════════════════")
-print("    🎮 RUNIX HUB - MVSD AUTO FARM")
+print("    🎮 RUNIX HUB - MVSD AUTO FARM v2")
 print("═══════════════════════════════════════")
 print("✅ Script carregado com sucesso!")
 print("📍 Coordenadas pré-configuradas:")
 print("   X: 31.6, Y: -114.5, Z: 57.9")
+print("")
+print("🔧 CORREÇÕES APLICADAS:")
+print("✅ Wallbang corrigido - não afeta o chão")
+print("✅ Auto Shoot contínuo - sem delay")
 print("")
 print("🚀 INÍCIO RÁPIDO:")
 print("1️⃣ Vá na aba 'Auto Farm'")
