@@ -1,0 +1,426 @@
+-- 1. Biblioteca MaterialLua com tratamento de erro
+local Material, materialLoaded = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/MaterialLua/master/Module.lua"))()
+end)
+
+if not materialLoaded then
+    warn("Falha ao carregar MaterialLua")
+    return
+end
+
+-- 2. Serviços e variáveis
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local camera = workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+
+-- Cache de instâncias para melhor performance
+local cachedHighlights = {}
+local cachedCharacters = {}
+
+-- Configurações com valores padrão
+local config = {
+    espEnabled = true,
+    enemyColor = Color3.fromRGB(255, 50, 50),
+    teamColor = Color3.fromRGB(50, 255, 50),
+    espTransparency = 0.5,
+    teamCheck = true
+}
+
+local hitboxConfig = {
+    enabled = false,
+    size = Vector3.new(7, 7, 7),
+    normalSize = Vector3.new(2, 2, 1),
+    transparency = 0.6
+}
+
+-- 3. Funções ESP / Hitbox otimizadas
+local function isEnemy(player)
+    if not config.teamCheck then return true end
+    if not LocalPlayer.Team or not player.Team then return true end
+    return player.Team ~= LocalPlayer.Team
+end
+
+local function updatePlayerESP(player, character)
+    if not character or not character.Parent then return end
+    
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+    
+    -- Atualizar Highlight
+    local highlight = cachedHighlights[player]
+    if highlight then
+        highlight.Enabled = config.espEnabled and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0
+        
+        if highlight.Enabled then
+            local isEnemyPlayer = isEnemy(player)
+            highlight.FillColor = isEnemyPlayer and config.enemyColor or config.teamColor
+            highlight.OutlineColor = highlight.FillColor
+        end
+    end
+    
+    -- Atualizar Hitbox
+    if hitboxConfig.enabled and isEnemy(player) then
+        humanoidRootPart.Size = hitboxConfig.size
+        humanoidRootPart.Transparency = hitboxConfig.transparency
+        humanoidRootPart.Material = Enum.Material.ForceField
+        humanoidRootPart.CanCollide = false
+    else
+        humanoidRootPart.Size = hitboxConfig.normalSize
+        humanoidRootPart.Transparency = 1
+        humanoidRootPart.Material = Enum.Material.Plastic
+    end
+end
+
+local function createESP(player)
+    if player == LocalPlayer then return end
+    
+    local function setupCharacter(character)
+        if not character then return end
+        repeat task.wait() until character:FindFirstChild("HumanoidRootPart")
+        
+        -- Criar Highlight se não existir
+        if not cachedHighlights[player] then
+            local highlight = Instance.new("Highlight")
+            highlight.Name = "ESP_Highlight"
+            highlight.FillTransparency = config.espTransparency
+            highlight.OutlineTransparency = 0
+            highlight.Adornee = character
+            highlight.Parent = character
+            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            
+            cachedHighlights[player] = highlight
+        end
+        
+        cachedCharacters[player] = character
+        updatePlayerESP(player, character)
+    end
+    
+    -- Conectar eventos
+    if player.Character then
+        setupCharacter(player.Character)
+    end
+    
+    player.CharacterAdded:Connect(function(character)
+        setupCharacter(character)
+    end)
+    
+    player.CharacterRemoving:Connect(function()
+        cachedCharacters[player] = nil
+    end)
+end
+
+-- Inicializar ESP para jogadores existentes
+for _, player in pairs(Players:GetPlayers()) do
+    createESP(player)
+end
+
+Players.PlayerAdded:Connect(createESP)
+Players.PlayerRemoving:Connect(function(player)
+    cachedHighlights[player] = nil
+    cachedCharacters[player] = nil
+end)
+
+-- Loop de atualização otimizado
+local heartbeat = RunService.Heartbeat
+spawn(function()
+    while true do
+        if hitboxConfig.enabled or config.espEnabled then
+            for player, character in pairs(cachedCharacters) do
+                updatePlayerESP(player, character)
+            end
+        end
+        heartbeat:Wait()
+    end
+end)
+
+-- 4. Aimbot melhorado com suavização e validações
+local aiming = false
+local aimbotFOV = 100
+local aimSmoothness = 0.15
+local aimKey = Enum.UserInputType.MouseButton2 -- Botão direito do mouse
+local aimEnabled = true
+
+-- Configurar FOV Circle
+local Drawing = Drawing
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Radius = aimbotFOV
+fovCircle.Thickness = 1
+fovCircle.Transparency = 0.7
+fovCircle.Color = Color3.fromRGB(255, 255, 100)
+fovCircle.Filled = false
+fovCircle.ZIndex = 10
+
+local function isValidTarget(player)
+    if player == LocalPlayer then return false end
+    if not player.Character then return false end
+    
+    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    
+    return isEnemy(player)
+end
+
+local function getClosestTarget()
+    local closest, shortestDist = nil, aimbotFOV
+    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if isValidTarget(player) then
+            local character = player.Character
+            local head = character and character:FindFirstChild("Head")
+            
+            if head then
+                local screenPoint, onScreen = camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
+                    local distance = (mousePos - screenPos).Magnitude
+                    
+                    if distance < shortestDist then
+                        shortestDist = distance
+                        closest = player
+                    end
+                end
+            end
+        end
+    end
+    
+    return closest
+end
+
+-- Controle por tecla
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.UserInputType == aimKey then
+        aiming = aimEnabled
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == aimKey then
+        aiming = false
+    end
+end)
+
+-- Atualização do FOV Circle
+RunService.RenderStepped:Connect(function()
+    fovCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+    fovCircle.Radius = aimbotFOV
+    fovCircle.Visible = aiming and aimEnabled
+end)
+
+-- Aimbot principal
+RunService.RenderStepped:Connect(function()
+    if not aiming or not aimEnabled then return end
+    
+    local target = getClosestTarget()
+    if not target or not target.Character then return end
+    
+    local head = target.Character:FindFirstChild("Head")
+    if not head then return end
+    
+    local cam = workspace.CurrentCamera
+    local currentCFrame = cam.CFrame
+    
+    -- Calcular direção suavizada
+    local targetPosition = head.Position
+    local currentPosition = currentCFrame.Position
+    local direction = (targetPosition - currentPosition).Unit
+    
+    -- Criar novo CFrame com suavização
+    local newCFrame = CFrame.new(currentPosition, currentPosition + direction)
+    cam.CFrame = currentCFrame:Lerp(newCFrame, aimSmoothness)
+end)
+
+-- 5. GUI com MaterialLua - Versão melhorada
+local themes = { "Dark", "Light", "Aqua", "Jester" }
+local UI, PlayerTab, VisualTab, SettingsTab
+
+local function buildUI(theme)
+    if UI then 
+        UI:Destroy() 
+        task.wait(0.1) -- Pequeno delay para evitar conflitos
+    end
+    
+    UI = Material.Load({
+        Title = "Runix Hub - PvP",
+        Style = 2, -- Estilo mais moderno
+        SizeX = 450,
+        SizeY = 500,
+        Theme = theme or "Dark"
+    })
+    
+    -- Aba Player
+    PlayerTab = UI.New({ Title = "Combat" })
+    
+    PlayerTab.Toggle({
+        Text = "Ativar Aimbot",
+        Callback = function(state)
+            aimEnabled = state
+            if not state then aiming = false end
+        end,
+        Enabled = aimEnabled
+    })
+    
+    PlayerTab.Slider({
+        Text = "Suavidade Aimbot",
+        Min = 0.05,
+        Max = 0.5,
+        Def = aimSmoothness,
+        Callback = function(value)
+            aimSmoothness = value
+        end,
+        Decimals = 2
+    })
+    
+    PlayerTab.Slider({
+        Text = "Campo de Visão",
+        Min = 20,
+        Max = 300,
+        Def = aimbotFOV,
+        Callback = function(value)
+            aimbotFOV = value
+        end
+    })
+    
+    PlayerTab.Button({
+        Text = "Tecla Aimbot: Botão Direito",
+        Callback = function()
+            -- Futura implementação para mudar tecla
+            Material.Snackbar("Use o botão direito do mouse")
+        end
+    })
+    
+    -- Aba Visual
+    VisualTab = UI.New({ Title = "Visual" })
+    
+    VisualTab.Toggle({
+        Text = "Ativar ESP",
+        Callback = function(state)
+            config.espEnabled = state
+        end,
+        Enabled = config.espEnabled
+    })
+    
+    VisualTab.Toggle({
+        Text = "Verificar Time",
+        Callback = function(state)
+            config.teamCheck = state
+        end,
+        Enabled = config.teamCheck
+    })
+    
+    VisualTab.ColorPicker({
+        Text = "Cor Inimigos",
+        Default = config.enemyColor,
+        Callback = function(color)
+            config.enemyColor = color
+        end
+    })
+    
+    VisualTab.ColorPicker({
+        Text = "Cor Aliados",
+        Default = config.teamColor,
+        Callback = function(color)
+            config.teamColor = color
+        end
+    })
+    
+    VisualTab.Toggle({
+        Text = "Hitbox Expandida",
+        Callback = function(state)
+            hitboxConfig.enabled = state
+        end,
+        Enabled = hitboxConfig.enabled
+    })
+    
+    VisualTab.Slider({
+        Text = "Tamanho Hitbox",
+        Min = 2,
+        Max = 15,
+        Def = hitboxConfig.size.X,
+        Callback = function(value)
+            hitboxConfig.size = Vector3.new(value, value, value)
+        end
+    })
+    
+    -- Aba Configurações
+    SettingsTab = UI.New({ Title = "Configurações" })
+    
+    SettingsTab.Dropdown({
+        Text = "Tema da Interface",
+        Options = themes,
+        Callback = function(selection)
+            buildUI(selection)
+            Material.Snackbar("Tema alterado para: " .. selection)
+        end
+    })
+    
+    SettingsTab.Button({
+        Text = "Salvar Configurações",
+        Callback = function()
+            Material.Snackbar("Configurações salvas! (Implementar save system)")
+        end
+    })
+    
+    SettingsTab.Button({
+        Text = "Recarregar Script",
+        Callback = function()
+            Material.Snackbar("Recarregando...")
+            task.wait(1)
+            -- Implementar reload system
+        end
+    })
+    
+    SettingsTab.Toggle({
+        Text = "Mostrar FPS",
+        Callback = function(state)
+            -- Futura implementação de FPS counter
+        end,
+        Enabled = false
+    })
+    
+    UI.Init()
+end
+
+-- Inicializar UI
+local success, err = pcall(function()
+    buildUI("Dark")
+end)
+
+if not success then
+    warn("Erro ao criar interface:", err)
+end
+
+-- Função de limpeza
+local function cleanup()
+    for _, highlight in pairs(cachedHighlights) do
+        if highlight then
+            highlight:Destroy()
+        end
+    end
+    
+    if fovCircle then
+        fovCircle:Remove()
+    end
+    
+    if UI then
+        UI:Destroy()
+    end
+    
+    cachedHighlights = {}
+    cachedCharacters = {}
+end
+
+-- Conectar evento de saída do jogo
+game:BindToClose(function()
+    cleanup()
+end)
+
+-- Notificação de inicialização
+warn("[Runix Hub] Script PvP carregado com sucesso!")
