@@ -1,646 +1,361 @@
--- Script PvP Runix Hub - Versão Corrigida
--- Por favor, execute no executor apropriado (Synapse, KRNL, Fluxus, etc.)
+-- 1. Biblioteca MaterialLua 
+local Material = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/MaterialLua/master/Module.lua"))()
 
--- Verificar se estamos no Roblox
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
--- 1. Biblioteca MaterialLua (requer executor com permissão de HTTP)
-local Material
-local success, errorMsg = pcall(function()
-    Material = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/MaterialLua/master/Module.lua"))()
-end)
-
-if not success then
-    warn("⚠️ Falha ao carregar MaterialLua: " .. tostring(errorMsg))
-    warn("📁 Tentando carregar interface básica...")
-    
-    -- Interface básica alternativa
-    local ScreenGui = Instance.new("ScreenGui")
-    local TextLabel = Instance.new("TextLabel")
-    ScreenGui.Parent = game.CoreGui
-    TextLabel.Parent = ScreenGui
-    TextLabel.Size = UDim2.new(0, 300, 0, 50)
-    TextLabel.Position = UDim2.new(0.5, -150, 0.5, -25)
-    TextLabel.Text = "MaterialLua não carregou\nUse um executor compatível"
-    TextLabel.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    TextLabel.TextColor3 = Color3.new(1, 1, 1)
-    
-    -- Se MaterialLua não carregar, pare aqui
-    return
-end
-
--- 2. Serviços essenciais
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-
--- Referências importantes
-local LocalPlayer = Players.LocalPlayer
+-- 2. Serviços e variáveis
+local Players, RunService, LocalPlayer = game:GetService("Players"), game:GetService("RunService"), game:GetService("Players").LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
-local Camera = Workspace.CurrentCamera
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local camera = workspace.CurrentCamera
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- Aguardar LocalPlayer carregar completamente
-repeat task.wait() until LocalPlayer.Character ~= nil
+local config = { espEnabled = true, enemyColor = Color3.fromRGB(255,0,0), teamColor = Color3.fromRGB(0,255,0) }
+local hitboxConfig = { enabled = false, size = Vector3.new(7,7,7), normalSize = Vector3.new(2,2,1) }
 
--- 3. Configurações
-local Config = {
-    -- ESP
-    ESP = {
-        Enabled = true,
-        TeamCheck = true,
-        EnemyColor = Color3.fromRGB(255, 50, 50),
-        TeamColor = Color3.fromRGB(50, 255, 50),
-        FillTransparency = 0.5,
-        OutlineTransparency = 0,
-        Thickness = 1
-    },
-    
-    -- Aimbot
-    Aimbot = {
-        Enabled = false,
-        AimKey = Enum.UserInputType.MouseButton2, -- Botão direito
-        Smoothness = 0.15,
-        FOV = 100,
-        VisibleCheck = true,
-        TeamCheck = true
-    },
-    
-    -- Hitbox
-    Hitbox = {
-        Enabled = false,
-        Size = Vector3.new(7, 7, 7),
-        NormalSize = Vector3.new(2, 2, 1),
-        Transparency = 0.6,
-        Material = Enum.Material.ForceField
-    }
+-- Configuração do Auto Farm COM COORDENADAS PRÉ-DEFINIDAS
+local autoFarmConfig = {
+    enabled = false,
+    autoShoot = false,
+    wallbang = false,
+    shootDelay = 0.05,
+    teleportToPad = false,
+    padPosition = CFrame.new(31.6, -114.5, 57.9) -- Coordenadas do pad salvas!
 }
 
--- 4. Variáveis globais
-local ESPCache = {} -- { [Player] = {Highlight = obj, Box = obj} }
-local Aiming = false
-local FOVCircle
-
--- 5. Funções de utilitário
-local function IsEnemy(Player)
-    if not Config.ESP.TeamCheck then 
-        return true 
-    end
-    if not LocalPlayer.Team or not Player.Team then 
-        return true 
-    end
-    return Player.Team ~= LocalPlayer.Team
-end
-
-local function IsAlive(Character)
-    if not Character then return false end
-    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-    return Humanoid and Humanoid.Health > 0
-end
-
-local function IsVisible(Part)
-    if not Config.Aimbot.VisibleCheck then return true end
-    
-    local Character = LocalPlayer.Character
-    if not Character then return false end
-    
-    local Head = Character:FindFirstChild("Head")
-    if not Head then return false end
-    
-    local Origin = Head.Position
-    local Target = Part.Position
-    local Direction = (Target - Origin).Unit * (Origin - Target).Magnitude
-    
-    local RaycastParams = RaycastParams.new()
-    RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-    RaycastParams.FilterDescendantsInstances = {Character, Camera}
-    RaycastParams.IgnoreWater = true
-    
-    local Result = Workspace:Raycast(Origin, Direction, RaycastParams)
-    
-    if Result then
-        local HitParent = Result.Instance:FindFirstAncestorOfClass("Model")
-        if HitParent and Players:GetPlayerFromCharacter(HitParent) then
-            return true
+-- 3. Funções ESP / Hitbox
+local function updateAll()
+    for _, pl in pairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and pl.Character then
+            local hl = pl.Character:FindFirstChild("ESP_Highlight")
+            if hl then
+                local col = (pl.Team == LocalPlayer.Team) and config.teamColor or config.enemyColor
+                hl.FillColor, hl.OutlineColor, hl.Enabled = col, col, config.espEnabled
+            end
+            local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if hitboxConfig.enabled and pl.Team ~= LocalPlayer.Team then
+                    hrp.Size, hrp.Transparency, hrp.Material = hitboxConfig.size, 0.6, Enum.Material.ForceField
+                else
+                    hrp.Size, hrp.Transparency, hrp.Material = hitboxConfig.normalSize, 1, Enum.Material.Plastic
+                end
+                hrp.CanCollide = false
+            end
         end
-        return false
+    end
+end
+
+local function tryCreateESP(pl, char)
+    if char:FindFirstChild("ESP_Highlight") then return end
+    local hl = Instance.new("Highlight", char)
+    hl.Name, hl.FillTransparency, hl.OutlineTransparency = "ESP_Highlight", 0.5, 0
+    hl.FillColor = (pl.Team == LocalPlayer.Team) and config.teamColor or config.enemyColor
+    hl.OutlineColor = hl.FillColor
+    hl.Enabled = config.espEnabled
+end
+
+local function applyToPlayer(pl)
+    if pl == LocalPlayer then return end
+    pl.CharacterAdded:Connect(function(char)
+        repeat task.wait() until char:FindFirstChild("HumanoidRootPart")
+        tryCreateESP(pl, char)
+        updateAll()
+    end)
+    if pl.Character then
+        tryCreateESP(pl, pl.Character)
+        updateAll()
+    end
+end
+for _, pl in pairs(Players:GetPlayers()) do applyToPlayer(pl) end
+Players.PlayerAdded:Connect(applyToPlayer)
+task.spawn(function() while true do if hitboxConfig.enabled then updateAll() end RunService.Heartbeat:Wait() end end)
+
+-- 4. Aimbot com FOV e Lerp
+local aiming = false
+local aimbotFOV = 100
+
+local function isAlive(plr)
+    return plr.Character and plr.Character:FindFirstChild("Head") and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0
+end
+
+local function getClosestTarget()
+    local closest, shortestDist = nil, math.huge
+    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+    for _, pl in pairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and isAlive(pl) then
+            local headPos, onScreen = camera:WorldToViewportPoint(pl.Character.Head.Position)
+            if onScreen then
+                local screenPos = Vector2.new(headPos.X, headPos.Y)
+                local dist = (mousePos - screenPos).Magnitude
+                if dist < shortestDist and dist <= aimbotFOV then
+                    shortestDist = dist
+                    closest = pl
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local Drawing = Drawing
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Radius = aimbotFOV
+fovCircle.Thickness = 2
+fovCircle.Transparency = 0.5
+fovCircle.Color = Color3.fromRGB(255, 255, 0)
+fovCircle.Filled = false
+
+RunService.RenderStepped:Connect(function()
+    fovCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+    fovCircle.Radius = aimbotFOV
+    fovCircle.Visible = aiming
+end)
+
+RunService.RenderStepped:Connect(function()
+    if aiming then
+        local target = getClosestTarget()
+        if target and target.Character and target.Character:FindFirstChild("Head") then
+            local cam = workspace.CurrentCamera
+            local headPos = target.Character.Head.Position
+            local camPos = cam.CFrame.Position
+            local desiredCFrame = CFrame.new(camPos, headPos)
+            cam.CFrame = cam.CFrame:Lerp(desiredCFrame, 0.15)
+        end
+    end
+end)
+
+-- 5. SISTEMA DE AUTO FARM COM COORDENADAS PRÉ-DEFINIDAS
+
+local function saveCurrentPosition()
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
+        return false 
     end
     
+    autoFarmConfig.padPosition = LocalPlayer.Character.HumanoidRootPart.CFrame
+    local pos = autoFarmConfig.padPosition.Position
+    print(string.format("[Auto Farm] ✅ Posição salva: X: %.1f, Y: %.1f, Z: %.1f", pos.X, pos.Y, pos.Z))
     return true
 end
 
--- 6. Sistema ESP
-local function CreateESP(Player)
-    if Player == LocalPlayer then return end
-    
-    local ESPData = {
-        Highlight = nil,
-        Box = nil,
-        Tracer = nil,
-        Character = nil
-    }
-    
-    ESPCache[Player] = ESPData
-    
-    local function SetupCharacter(Character)
-        if not Character then return end
-        
-        -- Aguardar partes essenciais
-        repeat task.wait() until Character:FindFirstChild("HumanoidRootPart")
-        
-        -- Criar Highlight
-        if not ESPData.Highlight then
-            ESPData.Highlight = Instance.new("Highlight")
-            ESPData.Highlight.Name = "ESP_Highlight_" .. Player.Name
-            ESPData.Highlight.FillTransparency = Config.ESP.FillTransparency
-            ESPData.Highlight.OutlineTransparency = Config.ESP.OutlineTransparency
-            ESPData.Highlight.OutlineThickness = Config.ESP.Thickness
-            ESPData.Highlight.Adornee = Character
-            ESPData.Highlight.Parent = Character
-        end
-        
-        -- Criar Box Outline
-        if not ESPData.Box then
-            ESPData.Box = Instance.new("BoxHandleAdornment")
-            ESPData.Box.Name = "ESP_Box_" .. Player.Name
-            ESPData.Box.Adornee = Character:WaitForChild("HumanoidRootPart")
-            ESPData.Box.AlwaysOnTop = true
-            ESPData.Box.ZIndex = 5
-            ESPData.Box.Size = Character.HumanoidRootPart.Size * 1.2
-            ESPData.Box.Transparency = 0.7
-            ESPData.Box.Parent = Character.HumanoidRootPart
-        end
-        
-        ESPData.Character = Character
-        
-        -- Atualizar cores
-        if ESPData.Highlight and ESPData.Box then
-            local IsEnemyPlayer = IsEnemy(Player)
-            local Color = IsEnemyPlayer and Config.ESP.EnemyColor or Config.ESP.TeamColor
-            
-            ESPData.Highlight.FillColor = Color
-            ESPData.Highlight.OutlineColor = Color
-            ESPData.Highlight.Enabled = Config.ESP.Enabled and IsAlive(Character)
-            
-            ESPData.Box.Color3 = Color
-            ESPData.Box.Visible = Config.ESP.Enabled and IsAlive(Character)
-        end
+local function teleportToPad()
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
+        return false
     end
     
-    -- Conectar eventos
-    if Player.Character then
-        SetupCharacter(Player.Character)
+    if not autoFarmConfig.padPosition then
+        print("[Auto Farm] ❌ ERRO: Nenhuma posição configurada!")
+        return false
     end
     
-    Player.CharacterAdded:Connect(function(Character)
-        SetupCharacter(Character)
-    end)
-    
-    Player.CharacterRemoving:Connect(function()
-        if ESPData.Highlight then
-            ESPData.Highlight:Destroy()
-            ESPData.Highlight = nil
-        end
-        if ESPData.Box then
-            ESPData.Box:Destroy()
-            ESPData.Box = nil
-        end
-        ESPData.Character = nil
-    end)
+    -- Teleporta para a posição salva
+    LocalPlayer.Character.HumanoidRootPart.CFrame = autoFarmConfig.padPosition
+    wait(0.3)
+    return true
 end
 
-local function UpdateAllESP()
-    for Player, ESPData in pairs(ESPCache) do
-        if ESPData.Character and ESPData.Highlight and ESPData.Box then
-            local IsEnemyPlayer = IsEnemy(Player)
-            local Color = IsEnemyPlayer and Config.ESP.EnemyColor or Config.ESP.TeamColor
-            local IsAliveChar = IsAlive(ESPData.Character)
-            
-            ESPData.Highlight.FillColor = Color
-            ESPData.Highlight.OutlineColor = Color
-            ESPData.Highlight.Enabled = Config.ESP.Enabled and IsAliveChar
-            
-            ESPData.Box.Color3 = Color
-            ESPData.Box.Visible = Config.ESP.Enabled and IsAliveChar
-            
-            -- Atualizar tamanho do box
-            if ESPData.Character:FindFirstChild("HumanoidRootPart") then
-                ESPData.Box.Size = ESPData.Character.HumanoidRootPart.Size * 1.2
-                ESPData.Box.Adornee = ESPData.Character.HumanoidRootPart
+local function getEnemyPlayer()
+    for _, pl in pairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and pl.Team ~= LocalPlayer.Team and isAlive(pl) then
+            return pl
+        end
+    end
+    return nil
+end
+
+local function shootAtTarget(target)
+    if not target or not target.Character then return end
+    
+    local head = target.Character:FindFirstChild("Head")
+    if not head then return end
+    
+    -- Desabilita colisão para wallbang
+    if autoFarmConfig.wallbang then
+        for _, part in pairs(workspace:GetDescendants()) do
+            if part:IsA("BasePart") and not part:IsDescendantOf(LocalPlayer.Character) and not part:IsDescendantOf(target.Character) then
+                part.CanCollide = false
             end
         end
     end
+    
+    -- Mira na cabeça do inimigo
+    local cam = workspace.CurrentCamera
+    cam.CFrame = CFrame.new(cam.CFrame.Position, head.Position)
+    
+    -- Simula o clique do mouse para atirar
+    mouse1press()
+    wait(autoFarmConfig.shootDelay)
+    mouse1release()
 end
 
--- 7. Sistema Hitbox
-local function UpdateHitboxes()
-    for Player, ESPData in pairs(ESPCache) do
-        if ESPData.Character and ESPData.Character:FindFirstChild("HumanoidRootPart") then
-            local HRP = ESPData.Character.HumanoidRootPart
+-- Loop principal do Auto Farm
+local farmRunning = false
+task.spawn(function()
+    while true do
+        wait(0.1)
+        
+        if autoFarmConfig.enabled and not farmRunning then
+            farmRunning = true
             
-            if Config.Hitbox.Enabled and IsEnemy(Player) then
-                HRP.Size = Config.Hitbox.Size
-                HRP.Transparency = Config.Hitbox.Transparency
-                HRP.Material = Config.Hitbox.Material
-                HRP.CanCollide = false
-            else
-                HRP.Size = Config.Hitbox.NormalSize
-                HRP.Transparency = 1
-                HRP.Material = Enum.Material.Plastic
-            end
-        end
-    end
-end
-
--- 8. Sistema Aimbot
-local function GetClosestTarget()
-    local ClosestPlayer = nil
-    local ShortestDistance = Config.Aimbot.FOV
-    local MousePosition = Vector2.new(Mouse.X, Mouse.Y)
-    
-    for _, Player in pairs(Players:GetPlayers()) do
-        if Player == LocalPlayer then continue end
-        if not Player.Character then continue end
-        
-        local Character = Player.Character
-        local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-        if not Humanoid or Humanoid.Health <= 0 then continue end
-        
-        if Config.Aimbot.TeamCheck and not IsEnemy(Player) then continue end
-        
-        local Head = Character:FindFirstChild("Head")
-        if not Head then continue end
-        
-        local ScreenPosition, OnScreen = Camera:WorldToViewportPoint(Head.Position)
-        if not OnScreen then continue end
-        
-        if Config.Aimbot.VisibleCheck and not IsVisible(Head) then continue end
-        
-        local ScreenPoint = Vector2.new(ScreenPosition.X, ScreenPosition.Y)
-        local Distance = (MousePosition - ScreenPoint).Magnitude
-        
-        if Distance < ShortestDistance then
-            ShortestDistance = Distance
-            ClosestPlayer = Player
-        end
-    end
-    
-    return ClosestPlayer
-end
-
--- 9. FOV Circle Drawing
-if Drawing then
-    FOVCircle = Drawing.new("Circle")
-    FOVCircle.Visible = false
-    FOVCircle.Radius = Config.Aimbot.FOV
-    FOVCircle.Thickness = 1
-    FOVCircle.Color = Color3.fromRGB(255, 255, 100)
-    FOVCircle.Filled = false
-    FOVCircle.Transparency = 0.7
-else
-    warn("⚠️ Drawing não está disponível, FOV Circle desativado")
-end
-
--- 10. Loop principal
-spawn(function()
-    -- Inicializar ESP para jogadores existentes
-    for _, Player in pairs(Players:GetPlayers()) do
-        CreateESP(Player)
-    end
-    
-    -- Conectar eventos
-    Players.PlayerAdded:Connect(function(Player)
-        CreateESP(Player)
-    end)
-    
-    Players.PlayerRemoving:Connect(function(Player)
-        if ESPCache[Player] then
-            if ESPCache[Player].Highlight then
-                ESPCache[Player].Highlight:Destroy()
-            end
-            if ESPCache[Player].Box then
-                ESPCache[Player].Box:Destroy()
-            end
-            ESPCache[Player] = nil
-        end
-    end)
-    
-    -- Loop de atualização
-    while task.wait(0.1) do
-        if Config.ESP.Enabled then
-            UpdateAllESP()
-        end
-        
-        if Config.Hitbox.Enabled then
-            UpdateHitboxes()
-        end
-        
-        -- Atualizar FOV Circle
-        if FOVCircle then
-            FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
-            FOVCircle.Radius = Config.Aimbot.FOV
-            FOVCircle.Visible = Config.Aimbot.Enabled and Aiming
-        end
-    end
-end)
-
--- 11. Input para Aimbot
-UserInputService.InputBegan:Connect(function(Input, GameProcessed)
-    if GameProcessed then return end
-    
-    if Input.UserInputType == Config.Aimbot.AimKey and Config.Aimbot.Enabled then
-        Aiming = true
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(Input)
-    if Input.UserInputType == Config.Aimbot.AimKey then
-        Aiming = false
-    end
-end)
-
--- 12. Loop do Aimbot
-RunService.RenderStepped:Connect(function()
-    if not Config.Aimbot.Enabled or not Aiming then return end
-    
-    local Target = GetClosestTarget()
-    if not Target or not Target.Character then return end
-    
-    local Head = Target.Character:FindFirstChild("Head")
-    if not Head then return end
-    
-    local CurrentCFrame = Camera.CFrame
-    local TargetPosition = Head.Position + Vector3.new(0, 1.5, 0) -- Mira um pouco acima da cabeça
-    
-    local SmoothedCFrame = CurrentCFrame:Lerp(
-        CFrame.new(CurrentCFrame.Position, TargetPosition),
-        Config.Aimbot.Smoothness
-    )
-    
-    Camera.CFrame = SmoothedCFrame
-end)
-
--- 13. Interface com MaterialLua
-local Themes = {"Dark", "Light", "Aqua", "Jester"}
-local UI
-
-local function CreateUI(Theme)
-    if UI then
-        UI:Destroy()
-        task.wait(0.1)
-    end
-    
-    UI = Material.Load({
-        Title = "Runix Hub - PvP",
-        Style = 3,
-        SizeX = 450,
-        SizeY = 500,
-        Theme = Theme or "Dark"
-    })
-    
-    -- Aba Principal
-    local MainTab = UI.New({Title = "Main"})
-    
-    MainTab.Toggle({
-        Text = "Enable ESP",
-        Callback = function(State)
-            Config.ESP.Enabled = State
-            UpdateAllESP()
-        end,
-        Enabled = Config.ESP.Enabled
-    })
-    
-    MainTab.Toggle({
-        Text = "Enable Aimbot",
-        Callback = function(State)
-            Config.Aimbot.Enabled = State
-            if not State then
-                Aiming = false
-            end
-        end,
-        Enabled = Config.Aimbot.Enabled
-    })
-    
-    MainTab.Toggle({
-        Text = "Enable Hitbox",
-        Callback = function(State)
-            Config.Hitbox.Enabled = State
-            UpdateHitboxes()
-        end,
-        Enabled = Config.Hitbox.Enabled
-    })
-    
-    MainTab.Button({
-        Text = "Update All Players",
-        Callback = function()
-            UpdateAllESP()
-            UpdateHitboxes()
-            Material.Snackbar("All players updated!")
-        end
-    })
-    
-    -- Aba ESP
-    local ESPTab = UI.New({Title = "ESP Settings"})
-    
-    ESPTab.ColorPicker({
-        Text = "Enemy Color",
-        Default = Config.ESP.EnemyColor,
-        Callback = function(Color)
-            Config.ESP.EnemyColor = Color
-            UpdateAllESP()
-        end
-    })
-    
-    ESPTab.ColorPicker({
-        Text = "Team Color",
-        Default = Config.ESP.TeamColor,
-        Callback = function(Color)
-            Config.ESP.TeamColor = Color
-            UpdateAllESP()
-        end
-    })
-    
-    ESPTab.Toggle({
-        Text = "Team Check",
-        Callback = function(State)
-            Config.ESP.TeamCheck = State
-            UpdateAllESP()
-        end,
-        Enabled = Config.ESP.TeamCheck
-    })
-    
-    ESPTab.Slider({
-        Text = "ESP Transparency",
-        Min = 0,
-        Max = 1,
-        Def = Config.ESP.FillTransparency,
-        Callback = function(Value)
-            Config.ESP.FillTransparency = Value
-            for _, ESPData in pairs(ESPCache) do
-                if ESPData.Highlight then
-                    ESPData.Highlight.FillTransparency = Value
+            task.spawn(function()
+                while autoFarmConfig.enabled do
+                    -- Verifica se está no lobby e teleporta para o pad
+                    if autoFarmConfig.teleportToPad and autoFarmConfig.padPosition then
+                        local success = teleportToPad()
+                        if success then
+                            wait(1.5) -- Espera após teleportar
+                        end
+                    end
+                    
+                    -- Auto Shoot - loop contínuo de tiro
+                    if autoFarmConfig.autoShoot then
+                        local enemy = getEnemyPlayer()
+                        if enemy and isAlive(enemy) then
+                            shootAtTarget(enemy)
+                        end
+                    end
+                    
+                    wait(autoFarmConfig.shootDelay)
                 end
-            end
-        end,
-        Decimals = 1
-    })
+                farmRunning = false
+            end)
+        end
+        
+        if not autoFarmConfig.enabled then
+            farmRunning = false
+        end
+    end
+end)
+
+-- 6. GUI com MaterialLua
+local themes = { "Dark", "Light", "Aqua", "Jester" }
+local UI, PlayerTab, FarmTab
+
+local function buildUI(theme)
+    if UI then UI:Destroy() end
+    UI = Material.Load({ Title="Runix Hub | MVSD", Style=1, SizeX=400, SizeY=450, Theme=theme or "Dark" })
     
-    -- Aba Aimbot
-    local AimbotTab = UI.New({Title = "Aimbot Settings"})
-    
-    AimbotTab.Slider({
-        Text = "Aimbot FOV",
-        Min = 20,
-        Max = 500,
-        Def = Config.Aimbot.FOV,
-        Callback = function(Value)
-            Config.Aimbot.FOV = Value
-            if FOVCircle then
-                FOVCircle.Radius = Value
-            end
+    -- Aba Player
+    PlayerTab = UI.New({ Title="Player" })
+    PlayerTab.Toggle({ Text="Ativar ESP", Callback=function(s) config.espEnabled = s updateAll() end, Enabled=config.espEnabled })
+    PlayerTab.Toggle({ Text="Hitbox Expandida (inimigos)", Callback=function(s) hitboxConfig.enabled = s updateAll() end, Enabled=hitboxConfig.enabled })
+    PlayerTab.Toggle({ Text="Aimbot", Callback=function(s) aiming = s end, Enabled=aiming })
+
+    PlayerTab.Slider({ Text="Tamanho Hitbox", Min=2, Max=15, Def=hitboxConfig.size.X,
+        Callback=function(v) hitboxConfig.size = Vector3.new(v,v,v) updateAll() end })
+
+    PlayerTab.Slider({ Text="Campo de Visão Aimbot", Min=20, Max=300, Def=aimbotFOV,
+        Callback=function(v) aimbotFOV = v end })
+
+    PlayerTab.Dropdown({
+        Text="Tema da UI",
+        Options=themes,
+        Callback=function(sel)
+            buildUI(sel)
         end
     })
     
-    AimbotTab.Slider({
-        Text = "Smoothness",
-        Min = 0.05,
-        Max = 1,
-        Def = Config.Aimbot.Smoothness,
-        Callback = function(Value)
-            Config.Aimbot.Smoothness = Value
-        end,
-        Decimals = 2
-    })
+    -- Aba Auto Farm
+    FarmTab = UI.New({ Title="Auto Farm" })
     
-    AimbotTab.Toggle({
-        Text = "Visible Check",
-        Callback = function(State)
-            Config.Aimbot.VisibleCheck = State
-        end,
-        Enabled = Config.Aimbot.VisibleCheck
-    })
-    
-    AimbotTab.Toggle({
-        Text = "Team Check",
-        Callback = function(State)
-            Config.Aimbot.TeamCheck = State
-        end,
-        Enabled = Config.Aimbot.TeamCheck
-    })
-    
-    -- Aba Hitbox
-    local HitboxTab = UI.New({Title = "Hitbox Settings"})
-    
-    HitboxTab.Slider({
-        Text = "Hitbox Size",
-        Min = 2,
-        Max = 20,
-        Def = Config.Hitbox.Size.X,
-        Callback = function(Value)
-            Config.Hitbox.Size = Vector3.new(Value, Value, Value)
-            UpdateHitboxes()
-        end
-    })
-    
-    HitboxTab.Slider({
-        Text = "Hitbox Transparency",
-        Min = 0,
-        Max = 1,
-        Def = Config.Hitbox.Transparency,
-        Callback = function(Value)
-            Config.Hitbox.Transparency = Value
-            UpdateHitboxes()
-        end,
-        Decimals = 1
-    })
-    
-    -- Aba Configurações
-    local SettingsTab = UI.New({Title = "Settings"})
-    
-    SettingsTab.Dropdown({
-        Text = "UI Theme",
-        Options = Themes,
-        Callback = function(Selected)
-            CreateUI(Selected)
-            Material.Snackbar("Theme changed to: " .. Selected)
-        end
-    })
-    
-    SettingsTab.Button({
-        Text = "Destroy GUI",
-        Callback = function()
-            if UI then
-                UI:Destroy()
-                UI = nil
-                Material.Snackbar("GUI destroyed! Reload script to show again.")
+    FarmTab.Button({
+        Text="🚀 Testar Teleporte para Pad",
+        Callback=function()
+            if teleportToPad() then
+                print("[Auto Farm] ✅ Teleportado com sucesso!")
+            else
+                print("[Auto Farm] ❌ Erro ao teleportar!")
             end
         end
     })
     
-    SettingsTab.Button({
-        Text = "Reload Script",
-        Callback = function()
-            Material.Snackbar("Please re-execute the script manually.")
+    FarmTab.Button({
+        Text="📍 Atualizar Posição (onde estou agora)",
+        Callback=function()
+            if saveCurrentPosition() then
+                print("[Auto Farm] ✅ Nova posição salva!")
+            else
+                print("[Auto Farm] ❌ Erro ao salvar!")
+            end
         end
     })
     
-    SettingsTab.Label({
-        Text = "Runix Hub v1.0",
-        Center = true
+    FarmTab.Toggle({ 
+        Text="🔥 ATIVAR AUTO FARM", 
+        Callback=function(s) 
+            autoFarmConfig.enabled = s 
+            if s then
+                print("═══════════════════════════════════════")
+                print("    🔥 AUTO FARM ATIVADO!")
+                print("═══════════════════════════════════════")
+                print("📍 Posição: X: 31.6, Y: -114.5, Z: 57.9")
+                print("🎯 O bot vai começar a farmar agora!")
+                print("═══════════════════════════════════════")
+            else
+                print("[Auto Farm] ❌ Auto Farm DESATIVADO!")
+            end
+        end, 
+        Enabled=autoFarmConfig.enabled 
     })
     
-    -- Inicializar UI
+    FarmTab.Toggle({ 
+        Text="📍 Auto Teleport para Pad", 
+        Callback=function(s) 
+            autoFarmConfig.teleportToPad = s 
+            if s then
+                print("[Auto Farm] ✅ Auto Teleport ATIVADO!")
+            end
+        end, 
+        Enabled=autoFarmConfig.teleportToPad 
+    })
+    
+    FarmTab.Toggle({ 
+        Text="🎯 Auto Shoot (Atirar Automaticamente)", 
+        Callback=function(s) 
+            autoFarmConfig.autoShoot = s 
+            if s then
+                print("[Auto Farm] ✅ Auto Shoot ATIVADO!")
+            end
+        end, 
+        Enabled=autoFarmConfig.autoShoot 
+    })
+    
+    FarmTab.Toggle({ 
+        Text="🧱 Wallbang (Atirar Através de Paredes)", 
+        Callback=function(s) 
+            autoFarmConfig.wallbang = s 
+            if s then
+                print("[Auto Farm] ✅ Wallbang ATIVADO!")
+            end
+        end, 
+        Enabled=autoFarmConfig.wallbang 
+    })
+    
+    FarmTab.Slider({ 
+        Text="⏱️ Delay entre Tiros (ms)", 
+        Min=10, 
+        Max=500, 
+        Def=autoFarmConfig.shootDelay * 1000,
+        Callback=function(v) 
+            autoFarmConfig.shootDelay = v / 1000 
+            print(string.format("[Auto Farm] Delay ajustado: %dms", v))
+        end 
+    })
+
     UI.Init()
 end
 
--- 14. Inicialização
-spawn(function()
-    task.wait(1) -- Esperar um pouco antes de criar a UI
-    local Success, Err = pcall(function()
-        CreateUI("Dark")
-    end)
-    
-    if not Success then
-        warn("⚠️ Erro ao criar interface: " .. tostring(Err))
-        
-        -- Criar interface básica alternativa
-        local BasicGUI = Instance.new("ScreenGui")
-        local Frame = Instance.new("Frame")
-        local TextLabel = Instance.new("TextLabel")
-        
-        BasicGUI.Name = "RunixHubGUI"
-        BasicGUI.Parent = game.CoreGui
-        
-        Frame.Size = UDim2.new(0, 200, 0, 60)
-        Frame.Position = UDim2.new(0.5, -100, 0, 10)
-        Frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-        Frame.BorderSizePixel = 0
-        Frame.Parent = BasicGUI
-        
-        TextLabel.Size = UDim2.new(1, 0, 1, 0)
-        TextLabel.BackgroundTransparency = 1
-        TextLabel.Text = "Runix Hub PvP\nLoaded Successfully"
-        TextLabel.TextColor3 = Color3.new(1, 1, 1)
-        TextLabel.TextScaled = true
-        TextLabel.Parent = Frame
-    else
-        print("✅ Runix Hub PvP carregado com sucesso!")
-        print("📁 ESP: " .. tostring(Config.ESP.Enabled))
-        print("🎯 Aimbot: " .. tostring(Config.Aimbot.Enabled))
-        print("🔲 Hitbox: " .. tostring(Config.Hitbox.Enabled))
-    end
-end)
+buildUI("Dark")
 
--- 15. Limpeza automática
-game:GetService("UserInputService").WindowFocusReleased:Connect(function()
-    -- Resetar estado quando perder foco
-    Aiming = false
-end)
-
--- Notificação de inicialização
-warn("[Runix Hub] Script PvP carregado!")
-warn("[Controls] Right Mouse Button: Aimbot")
-warn("[Status] ESP: ON | Aimbot: READY | Hitbox: CONFIGURABLE")
+print("═══════════════════════════════════════")
+print("    🎮 RUNIX HUB - MVSD AUTO FARM")
+print("═══════════════════════════════════════")
+print("✅ Script carregado com sucesso!")
+print("📍 Coordenadas pré-configuradas:")
+print("   X: 31.6, Y: -114.5, Z: 57.9")
+print("")
+print("🚀 INÍCIO RÁPIDO:")
+print("1️⃣ Vá na aba 'Auto Farm'")
+print("2️⃣ Ative '🔥 ATIVAR AUTO FARM'")
+print("3️⃣ Ative 'Auto Teleport', 'Auto Shoot' e 'Wallbang'")
+print("4️⃣ Deixe o bot farmar sozinho!")
+print("═══════════════════════════════════════")
